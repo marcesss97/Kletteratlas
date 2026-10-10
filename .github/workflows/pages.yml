@@ -1,0 +1,54 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      # Pages must already be on (Settings → Pages → Source: GitHub Actions); the workflow token cannot switch it on.
+      # On a private repository this needs a paid GitHub plan, otherwise this step fails with "Get Pages site failed".
+      - uses: actions/configure-pages@v5
+      - name: Prepare site
+        run: |
+          # The app is a flat folder: publish every web file at the repository root
+          # (index.html, sw.js, manifest, icons, favicons), nothing else.
+          mkdir _site
+          shopt -s nullglob
+          cp ./*.html ./*.js ./*.webmanifest ./*.png ./*.svg ./*.ico _site/
+          touch _site/.nojekyll
+      - name: Stamp version
+        run: |
+          # One version per deploy (date + commit). It goes into the service worker (a changed sw.js makes installed apps
+          # fetch everything anew), into the page (shown under «Mehr») and into version.json (checked by the running app).
+          V="$(date -u +%Y.%m.%d)-${GITHUB_SHA::7}"
+          T="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          stamp(){ grep -qE "$2" "$1" || { echo "::error file=$1::no '$2' to stamp"; exit 1; }; sed -i -E "s|$2|$3|" "$1"; }
+          stamp _site/sw.js      'const BUILD = "[^"]*";'       "const BUILD = \"$V\";"
+          stamp _site/index.html 'const APP_VERSION = "[^"]*";' "const APP_VERSION = \"$V\";"
+          stamp _site/index.html 'const APP_BUILT = "[^"]*";'   "const APP_BUILT = \"$T\";"
+          printf '{"version":"%s","built":"%s"}\n' "$V" "$T" > _site/version.json
+          grep -h 'const BUILD =\|const APP_VERSION =\|const APP_BUILT =' _site/sw.js _site/index.html
+          cat _site/version.json
+          ls -la _site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
